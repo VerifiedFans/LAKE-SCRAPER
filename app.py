@@ -48,7 +48,7 @@ def get_chrome_options():
     return chrome_options
 
 def scrape_artist_concerts(artist_url, max_pages=3):
-    """Scrape concerts for a single artist - Updated version"""
+    """Scrape concerts - Updated for current Bandsintown structure"""
     driver = None
     concerts = []
     
@@ -61,160 +61,111 @@ def scrape_artist_concerts(artist_url, max_pages=3):
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
         
-        # Extract artist name from URL or page
-        artist_name = artist_url.split('/')[-1].replace('-', ' ').title()
-        try:
-            # Try multiple selectors for artist name
-            artist_selectors = [
-                "h1", ".artist-name", "[data-testid='artist-name']", 
-                ".ArtistHeader_name", ".artist-header h1", ".page-title"
-            ]
-            for selector in artist_selectors:
-                try:
-                    artist_element = driver.find_element(By.CSS_SELECTOR, selector)
-                    if artist_element.text.strip():
-                        artist_name = artist_element.text.strip()
-                        break
-                except:
-                    continue
-        except:
-            pass
+        # Extract artist name from URL
+        url_parts = artist_url.split('/')[-1].split('-')
+        if len(url_parts) > 1:
+            artist_name = ' '.join(url_parts[1:]).title()  # Skip the digits, use the name part
+        else:
+            artist_name = artist_url.split('/')[-1].replace('-', ' ').title()
         
         logger.info(f"Processing artist: {artist_name}")
         
-        # Try to find and click "Past" tab/button
+        # Click "Past" tab - it's a clickable text element
         past_clicked = False
-        past_selectors = [
-            "//button[contains(text(), 'Past')]",
-            "//a[contains(text(), 'Past')]", 
-            "//div[contains(text(), 'Past')]",
-            "//span[contains(text(), 'Past')]",
-            "//*[contains(@class, 'past')]",
-            "//*[contains(@data-testid, 'past')]",
-            "//button[contains(@aria-label, 'Past')]"
-        ]
-        
-        for selector in past_selectors:
+        try:
+            # Wait for and click the "Past" tab (based on your screenshot)
+            past_tab = WebDriverWait(driver, 10).wait(
+                EC.element_to_be_clickable((By.XPATH, "//div[text()='Past'] | //span[text()='Past'] | //a[text()='Past']"))
+            )
+            driver.execute_script("arguments[0].click();", past_tab)
+            past_clicked = True
+            logger.info(f"✅ Clicked 'Past' tab for {artist_name}")
+            time.sleep(3)
+        except Exception as e:
+            logger.warning(f"Could not find 'Past' tab: {e}")
+            # Try alternative selectors
             try:
-                past_button = WebDriverWait(driver, 5).wait(
-                    EC.element_to_be_clickable((By.XPATH, selector))
-                )
-                driver.execute_script("arguments[0].click();", past_button)
+                past_tab = driver.find_element(By.XPATH, "//*[contains(text(), 'Past')]")
+                driver.execute_script("arguments[0].click();", past_tab)
                 past_clicked = True
-                logger.info(f"Clicked 'Past' button for {artist_name}")
+                logger.info(f"✅ Clicked 'Past' tab (alternative method)")
                 time.sleep(3)
-                break
             except:
-                continue
-        
-        if not past_clicked:
-            logger.warning(f"Could not find 'Past' button for {artist_name}, trying to scrape current page")
+                logger.warning(f"Could not click Past tab, will try to scrape current page")
         
         # Scrape concerts with pagination
         for page in range(max_pages):
             try:
-                # Wait for content to load
+                # Wait for concerts to load
                 time.sleep(2)
                 
-                # Try multiple selectors for concert/event elements
-                concert_selectors = [
-                    "[data-testid='event-card']",
-                    ".event-item", 
-                    ".concert-item", 
-                    ".show-item",
-                    ".event-card",
-                    ".EventCard",
-                    ".event",
-                    ".show",
-                    "[class*='event']",
-                    "[class*='Event']",
-                    "[class*='show']",
-                    "[class*='Show']"
-                ]
+                # Find concert containers based on the structure from your screenshot
+                # Each concert appears to be in a row/container with date, venue, location
+                concert_containers = driver.find_elements(By.XPATH, 
+                    "//div[contains(@class, 'concert') or contains(@class, 'event') or contains(@class, 'show')] | "
+                    "//div[.//*[contains(text(), '2025') or contains(text(), '2024')]] | "
+                    "//div[contains(., 'JUN') or contains(., 'MAY') or contains(., 'APR') or contains(., 'MAR')]"
+                )
                 
-                concert_elements = []
-                for selector in concert_selectors:
-                    try:
-                        elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                        if elements:
-                            concert_elements = elements
-                            logger.info(f"Found {len(elements)} elements with selector: {selector}")
-                            break
-                    except:
-                        continue
+                # If no specific containers found, try to find any div that contains concert-like content
+                if not concert_containers:
+                    # Look for divs that contain both a venue name and location pattern
+                    concert_containers = driver.find_elements(By.XPATH, 
+                        "//div[contains(., 'Center') or contains(., 'Church') or contains(., 'Hall') or contains(., 'Theater') or contains(., 'Venue')]"
+                    )
                 
-                if not concert_elements:
-                    logger.warning(f"No concert elements found on page {page + 1} for {artist_name}")
+                logger.info(f"Found {len(concert_containers)} potential concert containers on page {page + 1}")
+                
+                if not concert_containers:
+                    logger.warning(f"No concert containers found on page {page + 1}")
                     break
                 
-                # Extract concert information from each element
-                for i, element in enumerate(concert_elements):
+                # Extract concert information
+                page_concerts = []
+                for i, container in enumerate(concert_containers):
                     try:
-                        # Extract venue name with multiple selectors
+                        container_text = container.text.strip()
+                        if not container_text:
+                            continue
+                        
+                        # Split text into lines
+                        lines = [line.strip() for line in container_text.split('\n') if line.strip()]
+                        
+                        # Skip if not enough information
+                        if len(lines) < 2:
+                            continue
+                        
+                        # Extract information based on the pattern from your screenshot
                         venue_name = ""
-                        venue_selectors = [
-                            ".venue-name", "[data-testid='venue-name']", 
-                            ".event-venue", ".venue", ".location-name",
-                            "h3", "h4", "h2", ".title", ".name",
-                            "[class*='venue']", "[class*='Venue']"
-                        ]
-                        
-                        for selector in venue_selectors:
-                            try:
-                                venue_elem = element.find_element(By.CSS_SELECTOR, selector)
-                                text = venue_elem.text.strip()
-                                if text and len(text) > 2:  # Make sure it's not just empty or very short
-                                    venue_name = text
-                                    break
-                            except:
-                                continue
-                        
-                        # Extract date with multiple selectors
-                        date_str = ""
-                        date_selectors = [
-                            ".event-date", "[data-testid='event-date']",
-                            ".date", ".show-date", "time", ".datetime",
-                            "[class*='date']", "[class*='Date']", "[class*='time']"
-                        ]
-                        
-                        for selector in date_selectors:
-                            try:
-                                date_elem = element.find_element(By.CSS_SELECTOR, selector)
-                                text = date_elem.text.strip()
-                                if text:
-                                    date_str = text
-                                    break
-                            except:
-                                continue
-                        
-                        # Extract venue address/location
                         venue_address = ""
-                        address_selectors = [
-                            ".venue-location", "[data-testid='venue-location']",
-                            ".event-location", ".location", ".city", ".address",
-                            ".venue-city", "[class*='location']", "[class*='Location']",
-                            "[class*='city']", "[class*='City']"
-                        ]
+                        date_str = ""
                         
-                        for selector in address_selectors:
-                            try:
-                                addr_elem = element.find_element(By.CSS_SELECTOR, selector)
-                                text = addr_elem.text.strip()
-                                if text:
-                                    venue_address = text
+                        # Look for venue name - typically the longest line or one with "Center", "Church", etc.
+                        for line in lines:
+                            if any(keyword in line for keyword in ['Center', 'Church', 'Hall', 'Theater', 'Venue', 'Club', 'Arena', 'Stadium', 'Baptist', 'Civic', 'Landscape', 'Design']):
+                                venue_name = line
+                                break
+                        
+                        # Look for location (city, state pattern like "Corinth, MS")
+                        for line in lines:
+                            if ', ' in line and len(line.split(', ')) == 2:
+                                parts = line.split(', ')
+                                if len(parts[1]) == 2:  # State abbreviation
+                                    venue_address = line
                                     break
-                            except:
-                                continue
                         
-                        # If we couldn't find venue name, try to use any text from the element
-                        if not venue_name:
-                            try:
-                                all_text = element.text.strip()
-                                lines = [line.strip() for line in all_text.split('\n') if line.strip()]
-                                if lines:
-                                    venue_name = lines[0]  # Use first non-empty line
-                            except:
-                                pass
+                        # Look for date (month abbreviation + number)
+                        for line in lines:
+                            if any(month in line.upper() for month in ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']):
+                                date_str = line
+                                break
+                        
+                        # If we didn't find venue name with keywords, use the first substantial line
+                        if not venue_name and lines:
+                            for line in lines:
+                                if len(line) > 5 and 'I Was There' not in line and not any(month in line.upper() for month in ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN']):
+                                    venue_name = line
+                                    break
                         
                         # Only add if we have at least a venue name
                         if venue_name:
@@ -224,53 +175,53 @@ def scrape_artist_concerts(artist_url, max_pages=3):
                                 'venue_address': venue_address or 'Not specified',
                                 'concert_date': date_str or 'Date not found'
                             }
-                            concerts.append(concert)
-                            logger.info(f"Found concert: {venue_name} - {date_str}")
-                        else:
-                            logger.warning(f"Skipped element {i+1} - no venue name found")
-                    
+                            page_concerts.append(concert)
+                            logger.info(f"✅ Found concert: {venue_name} - {date_str} - {venue_address}")
+                        
                     except Exception as e:
-                        logger.warning(f"Error extracting concert data from element {i+1}: {e}")
+                        logger.warning(f"Error processing concert container {i+1}: {e}")
                         continue
                 
-                # Try to click "More Dates", "Load More", or "Show More" button
-                pagination_clicked = False
-                pagination_selectors = [
-                    "//button[contains(text(), 'More Dates')]",
-                    "//button[contains(text(), 'Load More')]", 
-                    "//button[contains(text(), 'Show More')]",
-                    "//button[contains(text(), 'View More')]",
-                    "//a[contains(text(), 'More')]",
-                    "//*[contains(@class, 'load-more')]",
-                    "//*[contains(@class, 'show-more')]",
-                    "//*[contains(@data-testid, 'load-more')]"
-                ]
+                concerts.extend(page_concerts)
+                logger.info(f"Page {page + 1}: Found {len(page_concerts)} concerts")
                 
-                for selector in pagination_selectors:
-                    try:
-                        more_button = driver.find_element(By.XPATH, selector)
-                        if more_button.is_displayed() and more_button.is_enabled():
-                            driver.execute_script("arguments[0].click();", more_button)
-                            pagination_clicked = True
-                            logger.info(f"Clicked pagination button for {artist_name}")
-                            time.sleep(3)
-                            break
-                    except:
-                        continue
+                # Try to find and click "More Dates" button
+                more_dates_clicked = False
+                try:
+                    # Scroll to bottom of page first to ensure "More Dates" button is visible
+                    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                    time.sleep(1)
+                    
+                    # Try to find "More Dates" button
+                    more_button = driver.find_element(By.XPATH, 
+                        "//button[contains(text(), 'More Dates')] | "
+                        "//a[contains(text(), 'More Dates')] | "
+                        "//div[contains(text(), 'More Dates')] | "
+                        "//span[contains(text(), 'More Dates')]"
+                    )
+                    
+                    if more_button.is_displayed() and more_button.is_enabled():
+                        driver.execute_script("arguments[0].click();", more_button)
+                        more_dates_clicked = True
+                        logger.info(f"✅ Clicked 'More Dates' button")
+                        time.sleep(3)  # Wait for new content to load
+                    
+                except Exception as e:
+                    logger.info(f"No 'More Dates' button found or couldn't click: {e}")
                 
-                if not pagination_clicked:
-                    logger.info(f"No more pagination available for {artist_name}")
+                if not more_dates_clicked:
+                    logger.info(f"No more pages available for {artist_name}")
                     break
                     
             except Exception as e:
                 logger.warning(f"Error on page {page + 1} for {artist_name}: {e}")
                 break
         
-        logger.info(f"Successfully found {len(concerts)} concerts for {artist_name}")
+        logger.info(f"🎯 Successfully found {len(concerts)} concerts for {artist_name}")
         return concerts
         
     except Exception as e:
-        logger.error(f"Error scraping {artist_url}: {e}")
+        logger.error(f"❌ Error scraping {artist_url}: {e}")
         return concerts
         
     finally:
@@ -336,17 +287,30 @@ def start_scraping():
     if not artist_urls:
         return jsonify({'error': 'No URLs provided'}), 400
     
-    # Validate URLs
+    # Validate URLs - must have the format with digits
     valid_urls = []
+    invalid_urls = []
+    
     for url in artist_urls:
         url = url.strip()
         if 'bandsintown.com' in url and '/a/' in url:
-            valid_urls.append(url)
+            # Check if URL has the required format with digits
+            path_part = url.split('/a/')[-1]
+            if '-' in path_part and path_part.split('-')[0].isdigit():
+                valid_urls.append(url)
+            else:
+                invalid_urls.append(url)
         else:
-            logger.warning(f"Invalid URL format: {url}")
+            invalid_urls.append(url)
+    
+    if invalid_urls:
+        error_msg = f"Invalid URLs (need 6-digit format like '/a/147132-artist-name'): {', '.join(invalid_urls[:3])}"
+        if len(invalid_urls) > 3:
+            error_msg += f" and {len(invalid_urls) - 3} more"
+        return jsonify({'error': error_msg}), 400
     
     if not valid_urls:
-        return jsonify({'error': 'No valid Bandsintown URLs provided. Please use format: https://www.bandsintown.com/a/artist-name'}), 400
+        return jsonify({'error': 'No valid Bandsintown URLs provided. Use format: https://www.bandsintown.com/a/123456-artist-name'}), 400
     
     # Start scraping in background thread
     thread = threading.Thread(target=scrape_multiple_artists, args=(valid_urls,))
