@@ -3,6 +3,7 @@ import os
 import csv
 import time
 import json
+import re
 from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -30,7 +31,8 @@ scraping_status = {
     'unique_venues': set(),
     'current_artist': '',
     'errors': [],
-    'debug_info': []
+    'debug_info': [],
+    'raw_html': ''
 }
 
 concert_data = []
@@ -49,7 +51,7 @@ def get_chrome_options():
     return chrome_options
 
 def scrape_artist_concerts(artist_url, max_pages=3):
-    """Scrape concerts - Targeted for exact Bandsintown structure from screenshot"""
+    """HTML Inspector version - captures raw HTML and tries multiple approaches"""
     driver = None
     concerts = []
     debug_info = []
@@ -67,7 +69,7 @@ def scrape_artist_concerts(artist_url, max_pages=3):
         )
         debug_info.append("✅ Page loaded")
         
-        # Extract artist name from URL
+        # Extract artist name
         url_parts = artist_url.split('/')[-1].split('-')
         if len(url_parts) > 1:
             artist_name = ' '.join(url_parts[1:]).title()
@@ -76,151 +78,145 @@ def scrape_artist_concerts(artist_url, max_pages=3):
         
         debug_info.append(f"🎤 Artist: {artist_name}")
         
-        # Click "Past" tab - Look for the tab structure from screenshot
+        # Wait for dynamic content to load
+        time.sleep(5)
+        
+        # Capture raw HTML for debugging
+        try:
+            page_source = driver.page_source
+            scraping_status['raw_html'] = page_source[:10000]  # First 10k characters
+            debug_info.append(f"📄 Captured {len(page_source)} characters of HTML")
+        except Exception as e:
+            debug_info.append(f"❌ Could not capture HTML: {e}")
+        
+        # Look for "Past" in the HTML and click it
         past_clicked = False
         try:
-            # Wait a bit for the page to fully load
-            time.sleep(3)
+            # Try to find "Past" tab with various methods
+            time.sleep(2)
             
-            # Try to find the "Past" tab - multiple approaches
-            past_selectors = [
-                "//div[text()='Past']",
-                "//span[text()='Past']", 
-                "//a[text()='Past']",
-                "//button[text()='Past']",
-                "//*[normalize-space(text())='Past']",
-                "//div[contains(@class, 'tab') and contains(text(), 'Past')]",
-                "//a[contains(@class, 'tab') and contains(text(), 'Past')]"
-            ]
+            # Method 1: Look for clickable "Past" text
+            past_elements = driver.find_elements(By.XPATH, "//*[normalize-space(text())='Past']")
+            debug_info.append(f"🔍 Found {len(past_elements)} elements with 'Past' text")
             
-            for i, selector in enumerate(past_selectors):
+            for i, elem in enumerate(past_elements):
                 try:
-                    past_element = driver.find_element(By.XPATH, selector)
-                    if past_element.is_displayed():
-                        # Scroll to element first
-                        driver.execute_script("arguments[0].scrollIntoView(true);", past_element)
+                    # Get element info
+                    tag = elem.tag_name
+                    classes = elem.get_attribute("class")
+                    clickable = elem.is_enabled() and elem.is_displayed()
+                    debug_info.append(f"   Past element {i+1}: <{tag}> class='{classes}' clickable={clickable}")
+                    
+                    if clickable:
+                        # Scroll to element and click
+                        driver.execute_script("arguments[0].scrollIntoView(true);", elem)
                         time.sleep(1)
-                        
-                        # Try clicking
-                        driver.execute_script("arguments[0].click();", past_element)
+                        driver.execute_script("arguments[0].click();", elem)
                         past_clicked = True
-                        debug_info.append(f"✅ Clicked 'Past' tab using selector {i+1}")
-                        time.sleep(4)  # Wait for content to load
+                        debug_info.append(f"   ✅ Successfully clicked Past element {i+1}")
+                        time.sleep(5)  # Wait for content to load
                         break
                         
                 except Exception as e:
-                    debug_info.append(f"   Past selector {i+1} failed: {e}")
+                    debug_info.append(f"   ❌ Error clicking Past element {i+1}: {e}")
                     continue
             
+            # Method 2: If no direct "Past" found, look for tab-like elements
             if not past_clicked:
-                debug_info.append("⚠️ Could not click 'Past' tab, will try to find concerts on current page")
-                
-        except Exception as e:
-            debug_info.append(f"❌ Error clicking Past tab: {e}")
-        
-        # Now scrape concerts with pagination
-        for page in range(max_pages):
-            debug_info.append(f"🔍 Scraping page {page + 1}")
-            
-            try:
-                # Wait for content to load
-                time.sleep(2)
-                
-                # Based on the screenshot, concerts appear to be in a structured list
-                # Each concert has: date (JUN 12), venue name, location, and buttons
-                
-                # Try to find concert containers - look for elements with dates
-                date_elements = driver.find_elements(By.XPATH, 
-                    "//div[contains(text(), 'JUN') or contains(text(), 'JUL') or contains(text(), 'AUG') or contains(text(), 'SEP') or contains(text(), 'OCT') or contains(text(), 'NOV') or contains(text(), 'DEC') or contains(text(), 'JAN') or contains(text(), 'FEB') or contains(text(), 'MAR') or contains(text(), 'APR') or contains(text(), 'MAY')]"
+                tab_elements = driver.find_elements(By.XPATH, 
+                    "//*[contains(@class, 'tab') or contains(@role, 'tab')]//*[contains(text(), 'Past')]"
                 )
+                debug_info.append(f"🔍 Found {len(tab_elements)} tab-like elements with 'Past'")
                 
-                debug_info.append(f"   Found {len(date_elements)} date elements")
-                
-                # Alternative: Look for elements containing venue-like names
-                venue_elements = driver.find_elements(By.XPATH,
-                    "//div[contains(text(), 'Church') or contains(text(), 'Baptist') or contains(text(), 'Center') or contains(text(), 'Hall') or contains(text(), 'Theater') or contains(text(), 'Arena') or contains(text(), 'Stadium')]"
-                )
-                
-                debug_info.append(f"   Found {len(venue_elements)} venue-like elements")
-                
-                # Look for concert rows/containers - elements that contain both date and venue info
-                # Based on screenshot, each concert seems to be in a row with date, name, location
-                concert_rows = driver.find_elements(By.XPATH,
-                    "//div[contains(., 'Baptist') or contains(., 'Church') or contains(., 'Center') or contains(., 'Hall')][contains(., 'JUN') or contains(., 'JUL') or contains(., 'AUG') or contains(., 'SEP') or contains(., 'OCT') or contains(., 'NOV') or contains(., 'DEC') or contains(., 'JAN') or contains(., 'FEB') or contains(., 'MAR') or contains(., 'APR') or contains(., 'MAY')]"
-                )
-                
-                debug_info.append(f"   Found {len(concert_rows)} potential concert rows")
-                
-                # If no specific rows found, try to find parent containers
-                if not concert_rows:
-                    # Look for any div that contains concert-like text patterns
-                    all_divs = driver.find_elements(By.TAG_NAME, "div")
-                    potential_concerts = []
-                    
-                    for div in all_divs:
-                        try:
-                            div_text = div.text.strip()
-                            if div_text and len(div_text) > 10:
-                                # Check if it contains concert-like patterns
-                                has_venue = any(word in div_text for word in ['Baptist', 'Church', 'Center', 'Hall', 'Theater', 'Arena', 'Stadium'])
-                                has_location = len([part for part in div_text.split(', ') if len(part) == 2]) > 0  # State abbreviations
-                                has_date = any(month in div_text.upper() for month in ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'])
-                                
-                                if (has_venue or has_location) and has_date:
-                                    potential_concerts.append(div)
-                        except:
-                            continue
-                    
-                    concert_rows = potential_concerts
-                    debug_info.append(f"   Found {len(concert_rows)} potential concert containers from all divs")
-                
-                # Extract data from found concert rows
-                page_concerts = []
-                for i, row in enumerate(concert_rows[:50]):  # Limit to first 50 to avoid duplicates
+                for elem in tab_elements:
                     try:
-                        row_text = row.text.strip()
-                        if not row_text or len(row_text) < 10:
-                            continue
+                        if elem.is_displayed() and elem.is_enabled():
+                            driver.execute_script("arguments[0].click();", elem)
+                            past_clicked = True
+                            debug_info.append("   ✅ Clicked Past tab element")
+                            time.sleep(5)
+                            break
+                    except:
+                        continue
                         
-                        debug_info.append(f"   Processing row {i+1}: {row_text[:100]}...")
+        except Exception as e:
+            debug_info.append(f"❌ Error finding/clicking Past: {e}")
+        
+        if past_clicked:
+            debug_info.append("✅ Successfully clicked Past tab")
+        else:
+            debug_info.append("⚠️ Could not click Past tab - will try to scrape current page")
+        
+        # Now try to extract concerts using multiple strategies
+        time.sleep(3)
+        
+        # Strategy 1: Look for structured concert data using regex on page text
+        try:
+            page_text = driver.find_element(By.TAG_NAME, "body").text
+            debug_info.append(f"📝 Page text length: {len(page_text)} characters")
+            
+            # Look for patterns like "JUN 12 ... Baptist Church ... City, ST"
+            concert_patterns = []
+            
+            # Split text into lines and look for concert-like patterns
+            lines = page_text.split('\n')
+            for i, line in enumerate(lines):
+                line = line.strip()
+                if line and any(month in line.upper() for month in ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']):
+                    # This line contains a date, look at surrounding lines for venue info
+                    context_lines = lines[max(0, i-2):min(len(lines), i+3)]
+                    context_text = '\n'.join(context_lines)
+                    
+                    if any(venue_word in context_text for venue_word in ['Church', 'Baptist', 'Center', 'Hall', 'Theater', 'Arena']):
+                        concert_patterns.append(context_text)
+                        debug_info.append(f"   📋 Found concert pattern: {context_text[:100]}...")
+            
+            debug_info.append(f"🎯 Strategy 1: Found {len(concert_patterns)} concert patterns in text")
+            
+        except Exception as e:
+            debug_info.append(f"❌ Strategy 1 failed: {e}")
+        
+        # Strategy 2: Look for specific HTML patterns
+        try:
+            # Look for elements containing both date and venue information
+            concert_elements = driver.find_elements(By.XPATH,
+                "//*[contains(text(), 'JUN') or contains(text(), 'JUL') or contains(text(), 'AUG') or contains(text(), 'MAY') or contains(text(), 'APR')]/ancestor::*[contains(., 'Church') or contains(., 'Baptist') or contains(., 'Center') or contains(., 'Hall')]"
+            )
+            
+            debug_info.append(f"🎯 Strategy 2: Found {len(concert_elements)} elements with date+venue")
+            
+            for i, elem in enumerate(concert_elements[:10]):
+                try:
+                    elem_text = elem.text.strip()
+                    if elem_text:
+                        debug_info.append(f"   Concert element {i+1}: {elem_text[:150]}...")
                         
-                        # Split into lines
-                        lines = [line.strip() for line in row_text.split('\n') if line.strip()]
+                        # Try to parse this element for concert data
+                        lines = [line.strip() for line in elem_text.split('\n') if line.strip()]
                         
-                        # Extract concert data
                         venue_name = ""
                         venue_address = ""
                         date_str = ""
                         
-                        # Find venue name (look for lines with venue keywords)
+                        # Extract venue
                         for line in lines:
-                            if any(keyword in line for keyword in ['Baptist', 'Church', 'Center', 'Hall', 'Theater', 'Arena', 'Stadium', 'Civic', 'Memorial', 'Community']):
+                            if any(word in line for word in ['Church', 'Baptist', 'Center', 'Hall', 'Theater', 'Arena', 'Stadium']):
                                 venue_name = line
                                 break
                         
-                        # Find location (look for City, ST pattern)
+                        # Extract location (City, ST pattern)
                         for line in lines:
-                            if ', ' in line:
-                                parts = line.split(', ')
-                                if len(parts) >= 2 and len(parts[-1]) == 2:  # Last part is state abbreviation
-                                    venue_address = line
-                                    break
+                            if re.match(r'.*,\s*[A-Z]{2}.*', line):
+                                venue_address = line
+                                break
                         
-                        # Find date (look for month abbreviations)
+                        # Extract date
                         for line in lines:
                             if any(month in line.upper() for month in ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']):
                                 date_str = line
                                 break
                         
-                        # If no specific venue found, use first substantial line
-                        if not venue_name and lines:
-                            for line in lines:
-                                if len(line) > 5 and 'Set Reminder' not in line and 'Tickets' not in line and 'Free Entry' not in line:
-                                    venue_name = line
-                                    break
-                        
-                        # Only add if we have meaningful data
-                        if venue_name and len(venue_name) > 3:
+                        if venue_name:
                             concert = {
                                 'artist_name': artist_name,
                                 'venue_name': venue_name,
@@ -228,68 +224,51 @@ def scrape_artist_concerts(artist_url, max_pages=3):
                                 'concert_date': date_str or 'Date not found'
                             }
                             
-                            # Avoid duplicates
+                            # Check for duplicates
                             is_duplicate = any(
-                                existing['venue_name'] == concert['venue_name'] and 
-                                existing['concert_date'] == concert['concert_date']
-                                for existing in concerts + page_concerts
+                                c['venue_name'] == concert['venue_name'] and 
+                                c['concert_date'] == concert['concert_date']
+                                for c in concerts
                             )
                             
                             if not is_duplicate:
-                                page_concerts.append(concert)
-                                debug_info.append(f"   ✅ Added: {venue_name} | {date_str} | {venue_address}")
-                            else:
-                                debug_info.append(f"   ⚠️ Skipped duplicate: {venue_name}")
+                                concerts.append(concert)
+                                debug_info.append(f"   ✅ Added concert: {venue_name} | {date_str} | {venue_address}")
                         
-                    except Exception as e:
-                        debug_info.append(f"   ❌ Error processing row {i+1}: {e}")
-                        continue
-                
-                concerts.extend(page_concerts)
-                debug_info.append(f"📊 Page {page + 1}: Added {len(page_concerts)} concerts (Total: {len(concerts)})")
-                
-                # Look for "Show More Dates" button
-                more_clicked = False
-                try:
-                    # Scroll to bottom first
-                    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                    time.sleep(2)
-                    
-                    # Look for "Show More Dates" button based on screenshot
-                    more_selectors = [
-                        "//div[contains(text(), 'Show More Dates')]",
-                        "//button[contains(text(), 'Show More Dates')]",
-                        "//a[contains(text(), 'Show More Dates')]",
-                        "//span[contains(text(), 'Show More Dates')]",
-                        "//*[contains(text(), 'More Dates')]",
-                        "//*[contains(text(), 'Show More')]"
-                    ]
-                    
-                    for selector in more_selectors:
-                        try:
-                            more_button = driver.find_element(By.XPATH, selector)
-                            if more_button.is_displayed() and more_button.is_enabled():
-                                driver.execute_script("arguments[0].scrollIntoView(true);", more_button)
-                                time.sleep(1)
-                                driver.execute_script("arguments[0].click();", more_button)
-                                more_clicked = True
-                                debug_info.append(f"   ✅ Clicked 'Show More Dates' button")
-                                time.sleep(4)  # Wait for new content
-                                break
-                        except Exception as e:
-                            debug_info.append(f"   More button selector failed: {e}")
-                            continue
-                            
                 except Exception as e:
-                    debug_info.append(f"   ❌ Error looking for More button: {e}")
+                    debug_info.append(f"   ❌ Error processing concert element {i+1}: {e}")
+                    continue
+                    
+        except Exception as e:
+            debug_info.append(f"❌ Strategy 2 failed: {e}")
+        
+        # Strategy 3: Brute force - look at ALL elements and find concert-like content
+        try:
+            all_elements = driver.find_elements(By.XPATH, "//*[text()]")
+            concert_like_elements = []
+            
+            for elem in all_elements:
+                try:
+                    text = elem.text.strip()
+                    if text and len(text) > 20:  # Substantial text
+                        # Check if it contains concert-like patterns
+                        has_date = any(month in text.upper() for month in ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'])
+                        has_venue = any(word in text for word in ['Church', 'Baptist', 'Center', 'Hall', 'Theater', 'Arena', 'Stadium'])
+                        has_location = bool(re.search(r'[A-Za-z]+,\s*[A-Z]{2}', text))
+                        
+                        if has_date and (has_venue or has_location):
+                            concert_like_elements.append(text)
+                except:
+                    continue
+            
+            debug_info.append(f"🎯 Strategy 3: Found {len(concert_like_elements)} concert-like elements")
+            
+            # Process the most promising elements
+            for i, text in enumerate(concert_like_elements[:5]):
+                debug_info.append(f"   Concert-like text {i+1}: {text[:200]}...")
                 
-                if not more_clicked:
-                    debug_info.append(f"   ⚠️ No 'Show More Dates' button found, stopping pagination")
-                    break
-                
-            except Exception as e:
-                debug_info.append(f"❌ Error on page {page + 1}: {e}")
-                break
+        except Exception as e:
+            debug_info.append(f"❌ Strategy 3 failed: {e}")
         
         # Store debug info
         scraping_status['debug_info'] = debug_info
@@ -320,6 +299,7 @@ def scrape_multiple_artists(artist_urls):
     scraping_status['unique_venues'] = set()
     scraping_status['errors'] = []
     scraping_status['debug_info'] = []
+    scraping_status['raw_html'] = ''
     concert_data = []
     
     try:
@@ -447,6 +427,14 @@ def get_debug_info():
         'debug_info': scraping_status.get('debug_info', []),
         'concert_data': concert_data,
         'concert_count': len(concert_data)
+    })
+
+@app.route('/raw_html')
+def get_raw_html():
+    """New endpoint to see the raw HTML that was captured"""
+    return jsonify({
+        'raw_html': scraping_status.get('raw_html', ''),
+        'html_length': len(scraping_status.get('raw_html', ''))
     })
 
 @app.route('/health')
