@@ -10,11 +10,14 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import logging
+import random
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key-here')
@@ -32,42 +35,170 @@ scraping_status = {
     'current_artist': '',
     'errors': [],
     'debug_info': [],
-    'raw_html': ''
+    'raw_html': '',
+    'page_title': '',
+    'current_url': ''
 }
 
 concert_data = []
 
 def get_chrome_options():
-    """Configure Chrome options for headless operation"""
+    """Configure Chrome to be as human-like as possible"""
     chrome_options = Options()
+    
+    # Essential for deployment
     chrome_options.add_argument('--headless')
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
-    chrome_options.add_argument('--disable-gpu')
-    chrome_options.add_argument('--window-size=1920,1080')
-    chrome_options.add_argument('--disable-web-security')
-    chrome_options.add_argument('--disable-features=VizDisplayCompositor')
+    
+    # Human-like window size (common laptop resolution)
+    chrome_options.add_argument('--window-size=1366,768')
+    
+    # Anti-detection measures
+    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+    chrome_options.add_argument('--disable-extensions')
+    chrome_options.add_argument('--disable-plugins')
+    chrome_options.add_argument('--disable-default-apps')
+    chrome_options.add_argument('--disable-background-timer-throttling')
+    chrome_options.add_argument('--disable-backgrounding-occluded-windows')
+    chrome_options.add_argument('--disable-renderer-backgrounding')
+    chrome_options.add_argument('--disable-features=TranslateUI')
+    chrome_options.add_argument('--disable-ipc-flooding-protection')
+    
+    # More realistic user agent (latest Chrome)
     chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    
+    # Disable automation indicators
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+    chrome_options.add_experimental_option('useAutomationExtension', False)
+    
+    # Add some preferences to look more human
+    prefs = {
+        "profile.default_content_setting_values": {
+            "notifications": 2,  # Block notifications
+            "geolocation": 2     # Block location sharing
+        },
+        "profile.managed_default_content_settings": {
+            "images": 1  # Allow images
+        }
+    }
+    chrome_options.add_experimental_option("prefs", prefs)
+    
     return chrome_options
 
+def human_like_delay(min_seconds=1, max_seconds=3):
+    """Random delay to mimic human thinking/reading time"""
+    delay = random.uniform(min_seconds, max_seconds)
+    time.sleep(delay)
+    return delay
+
+def human_like_scroll(driver, debug_info):
+    """Mimic human scrolling behavior"""
+    try:
+        # Random scroll pattern
+        scroll_actions = [
+            lambda: driver.execute_script("window.scrollBy(0, 300);"),  # Scroll down
+            lambda: driver.execute_script("window.scrollBy(0, -100);"), # Scroll back up a bit  
+            lambda: driver.execute_script("window.scrollBy(0, 500);"),  # Scroll down more
+            lambda: driver.execute_script("window.scrollTo(0, 0);"),    # Back to top
+        ]
+        
+        # Pick 2-3 random scroll actions
+        actions_to_perform = random.sample(scroll_actions, random.randint(2, 3))
+        
+        for action in actions_to_perform:
+            action()
+            human_like_delay(0.5, 1.5)  # Pause between scrolls
+            
+        debug_info.append("🖱️ Performed human-like scrolling")
+        
+    except Exception as e:
+        debug_info.append(f"❌ Error during scrolling: {e}")
+
+def human_like_mouse_movement(driver, element, debug_info):
+    """Move mouse to element in a human-like way"""
+    try:
+        actions = ActionChains(driver)
+        
+        # Move to a random nearby position first
+        viewport_width = driver.execute_script("return window.innerWidth;")
+        viewport_height = driver.execute_script("return window.innerHeight;")
+        
+        random_x = random.randint(100, min(500, viewport_width - 100))
+        random_y = random.randint(100, min(300, viewport_height - 100))
+        
+        # Move to random position first
+        actions.move_by_offset(random_x, random_y)
+        actions.pause(random.uniform(0.1, 0.3))
+        
+        # Then move to the actual element
+        actions.move_to_element(element)
+        actions.pause(random.uniform(0.2, 0.5))
+        
+        actions.perform()
+        debug_info.append("🖱️ Performed human-like mouse movement")
+        
+    except Exception as e:
+        debug_info.append(f"❌ Error during mouse movement: {e}")
+
 def scrape_artist_concerts(artist_url, max_pages=3):
-    """HTML Inspector version - captures raw HTML and tries multiple approaches"""
+    """Human-like scraper that mimics real user behavior"""
     driver = None
     concerts = []
     debug_info = []
     
     try:
-        driver = webdriver.Chrome(options=get_chrome_options())
-        debug_info.append("✅ Chrome driver started")
+        # Initialize driver with human-like options
+        chrome_options = get_chrome_options()
+        driver = webdriver.Chrome(options=chrome_options)
         
+        # Hide webdriver properties
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        driver.execute_script("Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]})")
+        driver.execute_script("Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']})")
+        
+        debug_info.append("✅ Initialized human-like Chrome driver")
+        
+        # Navigate to the page
+        debug_info.append(f"🌐 Navigating to: {artist_url}")
         driver.get(artist_url)
-        debug_info.append(f"✅ Navigated to: {artist_url}")
         
-        # Wait for page to load
-        WebDriverWait(driver, 15).wait(
-            EC.presence_of_element_located((By.TAG_NAME, "body"))
-        )
-        debug_info.append("✅ Page loaded")
+        # Mimic human page load waiting - look around first
+        human_like_delay(2, 4)
+        debug_info.append("⏳ Simulated human page load waiting")
+        
+        # Check if page loaded
+        try:
+            WebDriverWait(driver, 20).wait(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+            debug_info.append("✅ Page body loaded")
+        except TimeoutException:
+            debug_info.append("❌ Timeout waiting for page body")
+            return concerts
+        
+        # Get page information
+        page_title = driver.title
+        current_url = driver.current_url
+        scraping_status['page_title'] = page_title
+        scraping_status['current_url'] = current_url
+        
+        debug_info.append(f"📄 Page title: '{page_title}'")
+        debug_info.append(f"📄 Current URL: {current_url}")
+        
+        # Check for bot detection
+        page_source = driver.page_source.lower()
+        bot_indicators = ['access denied', 'blocked', 'captcha', 'forbidden', 'bot detected']
+        detected_indicators = [indicator for indicator in bot_indicators if indicator in page_source]
+        
+        if detected_indicators:
+            debug_info.append(f"🚫 Possible bot detection: {detected_indicators}")
+        else:
+            debug_info.append("✅ No obvious bot detection indicators")
+        
+        # Capture HTML sample
+        scraping_status['raw_html'] = driver.page_source[:15000]
+        debug_info.append(f"📄 Captured {len(driver.page_source)} characters of HTML")
         
         # Extract artist name
         url_parts = artist_url.split('/')[-1].split('-')
@@ -78,208 +209,265 @@ def scrape_artist_concerts(artist_url, max_pages=3):
         
         debug_info.append(f"🎤 Artist: {artist_name}")
         
-        # Wait for dynamic content to load
-        time.sleep(5)
+        # Human-like browsing behavior - scroll around and look at the page
+        human_like_scroll(driver, debug_info)
         
-        # Capture raw HTML for debugging
-        try:
-            page_source = driver.page_source
-            scraping_status['raw_html'] = page_source[:10000]  # First 10k characters
-            debug_info.append(f"📄 Captured {len(page_source)} characters of HTML")
-        except Exception as e:
-            debug_info.append(f"❌ Could not capture HTML: {e}")
+        # Wait like a human would while reading
+        human_like_delay(1, 3)
         
-        # Look for "Past" in the HTML and click it
+        # Look for the "Past" tab in a human-like way
+        debug_info.append("🔍 Looking for 'Past' tab...")
+        
         past_clicked = False
         try:
-            # Try to find "Past" tab with various methods
-            time.sleep(2)
+            # First, scroll to make sure we can see the navigation area
+            driver.execute_script("window.scrollTo(0, 200);")
+            human_like_delay(0.5, 1)
             
-            # Method 1: Look for clickable "Past" text
-            past_elements = driver.find_elements(By.XPATH, "//*[normalize-space(text())='Past']")
-            debug_info.append(f"🔍 Found {len(past_elements)} elements with 'Past' text")
+            # Look for Past tab with multiple strategies
+            past_selectors = [
+                "//a[normalize-space(text())='Past']",
+                "//div[normalize-space(text())='Past']", 
+                "//span[normalize-space(text())='Past']",
+                "//button[normalize-space(text())='Past']",
+                "//*[contains(text(), 'Past') and not(contains(text(), 'Concerts'))]"
+            ]
             
-            for i, elem in enumerate(past_elements):
+            past_element = None
+            for selector in past_selectors:
                 try:
-                    # Get element info
-                    tag = elem.tag_name
-                    classes = elem.get_attribute("class")
-                    clickable = elem.is_enabled() and elem.is_displayed()
-                    debug_info.append(f"   Past element {i+1}: <{tag}> class='{classes}' clickable={clickable}")
-                    
-                    if clickable:
-                        # Scroll to element and click
-                        driver.execute_script("arguments[0].scrollIntoView(true);", elem)
-                        time.sleep(1)
-                        driver.execute_script("arguments[0].click();", elem)
-                        past_clicked = True
-                        debug_info.append(f"   ✅ Successfully clicked Past element {i+1}")
-                        time.sleep(5)  # Wait for content to load
-                        break
-                        
-                except Exception as e:
-                    debug_info.append(f"   ❌ Error clicking Past element {i+1}: {e}")
-                    continue
-            
-            # Method 2: If no direct "Past" found, look for tab-like elements
-            if not past_clicked:
-                tab_elements = driver.find_elements(By.XPATH, 
-                    "//*[contains(@class, 'tab') or contains(@role, 'tab')]//*[contains(text(), 'Past')]"
-                )
-                debug_info.append(f"🔍 Found {len(tab_elements)} tab-like elements with 'Past'")
-                
-                for elem in tab_elements:
-                    try:
+                    elements = driver.find_elements(By.XPATH, selector)
+                    for elem in elements:
                         if elem.is_displayed() and elem.is_enabled():
-                            driver.execute_script("arguments[0].click();", elem)
-                            past_clicked = True
-                            debug_info.append("   ✅ Clicked Past tab element")
-                            time.sleep(5)
+                            past_element = elem
+                            debug_info.append(f"✅ Found Past element: {selector}")
                             break
-                    except:
-                        continue
-                        
-        except Exception as e:
-            debug_info.append(f"❌ Error finding/clicking Past: {e}")
-        
-        if past_clicked:
-            debug_info.append("✅ Successfully clicked Past tab")
-        else:
-            debug_info.append("⚠️ Could not click Past tab - will try to scrape current page")
-        
-        # Now try to extract concerts using multiple strategies
-        time.sleep(3)
-        
-        # Strategy 1: Look for structured concert data using regex on page text
-        try:
-            page_text = driver.find_element(By.TAG_NAME, "body").text
-            debug_info.append(f"📝 Page text length: {len(page_text)} characters")
-            
-            # Look for patterns like "JUN 12 ... Baptist Church ... City, ST"
-            concert_patterns = []
-            
-            # Split text into lines and look for concert-like patterns
-            lines = page_text.split('\n')
-            for i, line in enumerate(lines):
-                line = line.strip()
-                if line and any(month in line.upper() for month in ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']):
-                    # This line contains a date, look at surrounding lines for venue info
-                    context_lines = lines[max(0, i-2):min(len(lines), i+3)]
-                    context_text = '\n'.join(context_lines)
-                    
-                    if any(venue_word in context_text for venue_word in ['Church', 'Baptist', 'Center', 'Hall', 'Theater', 'Arena']):
-                        concert_patterns.append(context_text)
-                        debug_info.append(f"   📋 Found concert pattern: {context_text[:100]}...")
-            
-            debug_info.append(f"🎯 Strategy 1: Found {len(concert_patterns)} concert patterns in text")
-            
-        except Exception as e:
-            debug_info.append(f"❌ Strategy 1 failed: {e}")
-        
-        # Strategy 2: Look for specific HTML patterns
-        try:
-            # Look for elements containing both date and venue information
-            concert_elements = driver.find_elements(By.XPATH,
-                "//*[contains(text(), 'JUN') or contains(text(), 'JUL') or contains(text(), 'AUG') or contains(text(), 'MAY') or contains(text(), 'APR')]/ancestor::*[contains(., 'Church') or contains(., 'Baptist') or contains(., 'Center') or contains(., 'Hall')]"
-            )
-            
-            debug_info.append(f"🎯 Strategy 2: Found {len(concert_elements)} elements with date+venue")
-            
-            for i, elem in enumerate(concert_elements[:10]):
-                try:
-                    elem_text = elem.text.strip()
-                    if elem_text:
-                        debug_info.append(f"   Concert element {i+1}: {elem_text[:150]}...")
-                        
-                        # Try to parse this element for concert data
-                        lines = [line.strip() for line in elem_text.split('\n') if line.strip()]
-                        
-                        venue_name = ""
-                        venue_address = ""
-                        date_str = ""
-                        
-                        # Extract venue
-                        for line in lines:
-                            if any(word in line for word in ['Church', 'Baptist', 'Center', 'Hall', 'Theater', 'Arena', 'Stadium']):
-                                venue_name = line
-                                break
-                        
-                        # Extract location (City, ST pattern)
-                        for line in lines:
-                            if re.match(r'.*,\s*[A-Z]{2}.*', line):
-                                venue_address = line
-                                break
-                        
-                        # Extract date
-                        for line in lines:
-                            if any(month in line.upper() for month in ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']):
-                                date_str = line
-                                break
-                        
-                        if venue_name:
-                            concert = {
-                                'artist_name': artist_name,
-                                'venue_name': venue_name,
-                                'venue_address': venue_address or 'Not specified',
-                                'concert_date': date_str or 'Date not found'
-                            }
-                            
-                            # Check for duplicates
-                            is_duplicate = any(
-                                c['venue_name'] == concert['venue_name'] and 
-                                c['concert_date'] == concert['concert_date']
-                                for c in concerts
-                            )
-                            
-                            if not is_duplicate:
-                                concerts.append(concert)
-                                debug_info.append(f"   ✅ Added concert: {venue_name} | {date_str} | {venue_address}")
-                        
-                except Exception as e:
-                    debug_info.append(f"   ❌ Error processing concert element {i+1}: {e}")
-                    continue
-                    
-        except Exception as e:
-            debug_info.append(f"❌ Strategy 2 failed: {e}")
-        
-        # Strategy 3: Brute force - look at ALL elements and find concert-like content
-        try:
-            all_elements = driver.find_elements(By.XPATH, "//*[text()]")
-            concert_like_elements = []
-            
-            for elem in all_elements:
-                try:
-                    text = elem.text.strip()
-                    if text and len(text) > 20:  # Substantial text
-                        # Check if it contains concert-like patterns
-                        has_date = any(month in text.upper() for month in ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'])
-                        has_venue = any(word in text for word in ['Church', 'Baptist', 'Center', 'Hall', 'Theater', 'Arena', 'Stadium'])
-                        has_location = bool(re.search(r'[A-Za-z]+,\s*[A-Z]{2}', text))
-                        
-                        if has_date and (has_venue or has_location):
-                            concert_like_elements.append(text)
+                    if past_element:
+                        break
                 except:
                     continue
             
-            debug_info.append(f"🎯 Strategy 3: Found {len(concert_like_elements)} concert-like elements")
+            if past_element:
+                # Human-like interaction with the Past tab
+                debug_info.append("🖱️ Preparing to click Past tab...")
+                
+                # Scroll element into view
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", past_element)
+                human_like_delay(0.5, 1)
+                
+                # Move mouse to element in human-like way
+                human_like_mouse_movement(driver, past_element, debug_info)
+                
+                # Click with human-like pause
+                human_like_delay(0.2, 0.5)
+                
+                try:
+                    # Try regular click first
+                    past_element.click()
+                    past_clicked = True
+                    debug_info.append("✅ Clicked Past tab with regular click")
+                except:
+                    try:
+                        # Try JavaScript click if regular click fails
+                        driver.execute_script("arguments[0].click();", past_element)
+                        past_clicked = True
+                        debug_info.append("✅ Clicked Past tab with JavaScript click")
+                    except Exception as e:
+                        debug_info.append(f"❌ Failed to click Past tab: {e}")
+                
+                if past_clicked:
+                    # Human-like waiting for content to load
+                    debug_info.append("⏳ Waiting for Past concerts to load...")
+                    human_like_delay(3, 6)
+                    
+                    # Scroll to see new content
+                    driver.execute_script("window.scrollBy(0, 300);")
+                    human_like_delay(1, 2)
             
-            # Process the most promising elements
-            for i, text in enumerate(concert_like_elements[:5]):
-                debug_info.append(f"   Concert-like text {i+1}: {text[:200]}...")
+            else:
+                debug_info.append("❌ Could not find any Past tab element")
                 
         except Exception as e:
-            debug_info.append(f"❌ Strategy 3 failed: {e}")
+            debug_info.append(f"❌ Error finding/clicking Past tab: {e}")
+        
+        # Now extract concert data
+        debug_info.append("🎵 Extracting concert data...")
+        
+        # Wait for any dynamic content to load
+        human_like_delay(2, 4)
+        
+        # Get all text content from the page
+        try:
+            body_text = driver.find_element(By.TAG_NAME, "body").text
+            debug_info.append(f"📝 Body text length: {len(body_text)} characters")
+            
+            if body_text:
+                # Sample of content for debugging
+                debug_info.append(f"📝 Text sample: {body_text[:300]}...")
+                
+                # Look for concert patterns in the text
+                lines = [line.strip() for line in body_text.split('\n') if line.strip()]
+                concert_candidates = []
+                
+                # Find lines that look like concerts
+                for i, line in enumerate(lines):
+                    # Look for venue indicators
+                    venue_keywords = ['Baptist', 'Church', 'Center', 'Hall', 'Theater', 'Arena', 'Stadium', 'Civic', 'Memorial', 'Community', 'Gospel', 'Quartet']
+                    has_venue = any(keyword in line for keyword in venue_keywords)
+                    
+                    # Look for date indicators
+                    months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+                    has_date = any(month in line.upper() for month in months)
+                    
+                    # Look for location indicators (City, ST)
+                    has_location = bool(re.search(r'[A-Za-z\s]+,\s*[A-Z]{2}\b', line))
+                    
+                    if has_venue or has_date or has_location:
+                        # Get context around this line
+                        context_start = max(0, i-2)
+                        context_end = min(len(lines), i+3)
+                        context = lines[context_start:context_end]
+                        concert_candidates.append({
+                            'main_line': line,
+                            'context': context,
+                            'line_index': i
+                        })
+                
+                debug_info.append(f"🎯 Found {len(concert_candidates)} potential concert lines")
+                
+                # Process concert candidates
+                processed_venues = set()  # Avoid duplicates
+                
+                for candidate in concert_candidates[:20]:  # Limit to first 20
+                    try:
+                        context_text = '\n'.join(candidate['context'])
+                        debug_info.append(f"📋 Processing: {candidate['main_line'][:100]}...")
+                        
+                        # Extract venue name
+                        venue_name = ""
+                        for line in candidate['context']:
+                            if any(keyword in line for keyword in venue_keywords):
+                                venue_name = line.strip()
+                                break
+                        
+                        # Extract date
+                        date_str = ""
+                        for line in candidate['context']:
+                            if any(month in line.upper() for month in months):
+                                date_str = line.strip()
+                                break
+                        
+                        # Extract location
+                        venue_address = ""
+                        for line in candidate['context']:
+                            location_match = re.search(r'([A-Za-z\s]+,\s*[A-Z]{2})\b', line)
+                            if location_match:
+                                venue_address = location_match.group(1).strip()
+                                break
+                        
+                        # Use main line as venue if no specific venue found
+                        if not venue_name:
+                            venue_name = candidate['main_line']
+                        
+                        # Clean up venue name
+                        venue_name = re.sub(r'\s+', ' ', venue_name).strip()
+                        
+                        # Only add if we have a substantial venue name and haven't seen it before
+                        if venue_name and len(venue_name) > 3 and venue_name not in processed_venues:
+                            # Filter out non-venue lines
+                            skip_keywords = ['Set Reminder', 'Tickets', 'Free Entry', 'Follow', 'More Dates', 'Show More']
+                            if not any(skip in venue_name for skip in skip_keywords):
+                                concert = {
+                                    'artist_name': artist_name,
+                                    'venue_name': venue_name,
+                                    'venue_address': venue_address or 'Not specified',
+                                    'concert_date': date_str or 'Date not found'
+                                }
+                                
+                                concerts.append(concert)
+                                processed_venues.add(venue_name)
+                                debug_info.append(f"   ✅ Added: {venue_name} | {date_str} | {venue_address}")
+                        
+                    except Exception as e:
+                        debug_info.append(f"   ❌ Error processing candidate: {e}")
+                        continue
+                
+        except Exception as e:
+            debug_info.append(f"❌ Error extracting text content: {e}")
+        
+        # Look for "Show More Dates" button and click it (human-like)
+        for page_num in range(1, max_pages):
+            debug_info.append(f"🔍 Looking for 'Show More Dates' button (page {page_num + 1})...")
+            
+            try:
+                # Scroll to bottom to find the button
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                human_like_delay(1, 2)
+                
+                # Look for more dates button
+                more_selectors = [
+                    "//button[contains(text(), 'Show More Dates')]",
+                    "//a[contains(text(), 'Show More Dates')]",
+                    "//div[contains(text(), 'Show More Dates')]",
+                    "//*[contains(text(), 'More Dates')]",
+                    "//*[contains(text(), 'Load More')]"
+                ]
+                
+                more_button = None
+                for selector in more_selectors:
+                    try:
+                        elements = driver.find_elements(By.XPATH, selector)
+                        for elem in elements:
+                            if elem.is_displayed() and elem.is_enabled():
+                                more_button = elem
+                                break
+                        if more_button:
+                            break
+                    except:
+                        continue
+                
+                if more_button:
+                    debug_info.append("✅ Found 'Show More Dates' button")
+                    
+                    # Human-like interaction
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", more_button)
+                    human_like_delay(0.5, 1)
+                    
+                    # Move mouse and click
+                    human_like_mouse_movement(driver, more_button, debug_info)
+                    human_like_delay(0.3, 0.7)
+                    
+                    try:
+                        more_button.click()
+                        debug_info.append("✅ Clicked 'Show More Dates' button")
+                        
+                        # Wait for new content like a human would
+                        human_like_delay(3, 6)
+                        
+                        # TODO: Extract additional concerts from new content
+                        # (Same logic as above could be repeated here)
+                        
+                    except Exception as e:
+                        debug_info.append(f"❌ Failed to click More Dates button: {e}")
+                        break
+                else:
+                    debug_info.append("❌ No 'Show More Dates' button found")
+                    break
+                    
+            except Exception as e:
+                debug_info.append(f"❌ Error looking for More Dates button: {e}")
+                break
         
         # Store debug info
         scraping_status['debug_info'] = debug_info
         
         debug_info.append(f"🎯 FINAL RESULT: Found {len(concerts)} concerts for {artist_name}")
-        logger.info(f"Scraping completed for {artist_name}: {len(concerts)} concerts found")
+        logger.info(f"Human-like scraping completed for {artist_name}: {len(concerts)} concerts")
         
         return concerts
         
     except Exception as e:
-        error_msg = f"❌ Major error scraping {artist_url}: {e}"
+        error_msg = f"❌ Critical error in human-like scraping {artist_url}: {e}"
         debug_info.append(error_msg)
         scraping_status['debug_info'] = debug_info
         logger.error(error_msg)
@@ -287,10 +475,15 @@ def scrape_artist_concerts(artist_url, max_pages=3):
         
     finally:
         if driver:
-            driver.quit()
+            try:
+                # Human-like exit - don't just quit immediately
+                human_like_delay(1, 2)
+                driver.quit()
+            except:
+                pass
 
 def scrape_multiple_artists(artist_urls):
-    """Scrape concerts for multiple artists"""
+    """Scrape concerts for multiple artists with human-like delays between them"""
     global scraping_status, concert_data
     
     scraping_status['is_running'] = True
@@ -300,6 +493,8 @@ def scrape_multiple_artists(artist_urls):
     scraping_status['errors'] = []
     scraping_status['debug_info'] = []
     scraping_status['raw_html'] = ''
+    scraping_status['page_title'] = ''
+    scraping_status['current_url'] = ''
     concert_data = []
     
     try:
@@ -324,6 +519,12 @@ def scrape_multiple_artists(artist_urls):
                 logger.error(error_msg)
             
             scraping_status['artists_processed'] += 1
+            
+            # Human-like delay between artists (like switching tabs)
+            if i < len(artist_urls) - 1:  # Not the last artist
+                delay = random.uniform(5, 15)  # 5-15 seconds between artists
+                logger.info(f"Human-like delay: {delay:.1f} seconds before next artist")
+                time.sleep(delay)
             
     except Exception as e:
         logger.error(f"Error in scraping process: {e}")
@@ -390,7 +591,9 @@ def get_scraping_status():
         'unique_venues': len(scraping_status['unique_venues']),
         'current_artist': scraping_status['current_artist'],
         'errors': scraping_status['errors'],
-        'debug_info': scraping_status.get('debug_info', [])
+        'debug_info': scraping_status.get('debug_info', []),
+        'page_title': scraping_status.get('page_title', ''),
+        'current_url': scraping_status.get('current_url', '')
     })
 
 @app.route('/stop_scraping', methods=['POST'])
@@ -426,15 +629,18 @@ def get_debug_info():
     return jsonify({
         'debug_info': scraping_status.get('debug_info', []),
         'concert_data': concert_data,
-        'concert_count': len(concert_data)
+        'concert_count': len(concert_data),
+        'page_title': scraping_status.get('page_title', ''),
+        'current_url': scraping_status.get('current_url', '')
     })
 
 @app.route('/raw_html')
 def get_raw_html():
-    """New endpoint to see the raw HTML that was captured"""
     return jsonify({
         'raw_html': scraping_status.get('raw_html', ''),
-        'html_length': len(scraping_status.get('raw_html', ''))
+        'html_length': len(scraping_status.get('raw_html', '')),
+        'page_title': scraping_status.get('page_title', ''),
+        'current_url': scraping_status.get('current_url', '')
     })
 
 @app.route('/health')
