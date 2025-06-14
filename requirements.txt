@@ -3,3 +3,4 @@ selenium==4.15.2
 Werkzeug==2.3.7
 gunicorn==21.2.0
 chromedriver-autoinstaller==0.6.2
+webdriver-manager==4.0.1
