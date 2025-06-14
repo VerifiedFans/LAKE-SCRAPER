@@ -261,27 +261,72 @@ def scrape_artist_concerts(artist_url, max_retries=2):
             debug_info.append(f"🎤 Processing: {artist_name}")
             
             # Try to click Past tab
-            debug_info.append("🔍 Looking for Past tab...")
+            debug_info.append("🔍 Looking for Past tab in Concerts section...")
             try:
-                # Simple approach - look for Past text
-                past_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'Past')]")
+                # Look for the Concerts and tour dates section first
+                concert_section_found = False
+                try:
+                    concert_section = driver.find_element(By.XPATH, "//*[contains(text(), 'Concerts and tour dates')]")
+                    debug_info.append("✅ Found 'Concerts and tour dates' section")
+                    concert_section_found = True
+                except:
+                    debug_info.append("⚠️ Could not find 'Concerts and tour dates' section")
+                
+                # Look for Past tab near Upcoming tab
+                past_selectors = [
+                    # Look for Past near Upcoming
+                    "//div[contains(text(), 'Upcoming')]/following-sibling::*[contains(text(), 'Past')]",
+                    "//div[contains(text(), 'Upcoming')]/..//*[contains(text(), 'Past')]",
+                    # Direct Past tab searches
+                    "//div[normalize-space(text())='Past']",
+                    "//span[normalize-space(text())='Past']", 
+                    "//a[normalize-space(text())='Past']",
+                    "//button[normalize-space(text())='Past']",
+                    # Case insensitive
+                    "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'past')]"
+                ]
                 
                 clicked_past = False
-                for element in past_elements[:3]:  # Try first 3 matches
+                for i, selector in enumerate(past_selectors):
                     try:
-                        if element.is_displayed() and element.is_enabled():
-                            driver.execute_script("arguments[0].scrollIntoView();", element)
-                            human_delay(0.5, 1)
-                            element.click()
-                            clicked_past = True
-                            debug_info.append("✅ Clicked Past tab")
-                            human_delay(3, 5)  # Wait for content
+                        elements = driver.find_elements(By.XPATH, selector)
+                        debug_info.append(f"   Selector {i+1}: Found {len(elements)} Past elements")
+                        
+                        for element in elements:
+                            try:
+                                if element.is_displayed() and element.is_enabled():
+                                    # Scroll to element
+                                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+                                    human_delay(0.5, 1)
+                                    
+                                    # Try different click methods
+                                    try:
+                                        element.click()
+                                        clicked_past = True
+                                        debug_info.append(f"   ✅ Clicked Past tab with selector {i+1}")
+                                        break
+                                    except:
+                                        # Try JavaScript click
+                                        driver.execute_script("arguments[0].click();", element)
+                                        clicked_past = True
+                                        debug_info.append(f"   ✅ Clicked Past tab with JS (selector {i+1})")
+                                        break
+                            except Exception as e:
+                                debug_info.append(f"   ❌ Element not clickable: {e}")
+                                continue
+                        
+                        if clicked_past:
                             break
-                    except:
+                            
+                    except Exception as e:
+                        debug_info.append(f"   ❌ Selector {i+1} error: {e}")
                         continue
                 
-                if not clicked_past:
-                    debug_info.append("⚠️ Could not click Past tab, using current page")
+                if clicked_past:
+                    debug_info.append("✅ Successfully clicked Past tab, waiting for content...")
+                    human_delay(4, 7)  # Wait for Past concerts to load
+                else:
+                    debug_info.append("⚠️ Could not click Past tab, using current page (Upcoming)")
             
             except Exception as e:
                 debug_info.append(f"❌ Past tab error: {e}")
