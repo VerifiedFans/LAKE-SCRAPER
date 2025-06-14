@@ -185,6 +185,11 @@ def scrape_artist_concerts(artist_url, max_retries=2):
     concerts = []
     debug_info = []
     
+    # Extract artist name early (outside the retry loop)
+    url_parts = artist_url.split('/')[-1].split('-')
+    artist_name = ' '.join(url_parts[1:]).title() if len(url_parts) > 1 else 'Unknown Artist'
+    debug_info.append(f"🎤 Artist: {artist_name}")
+    
     for attempt in range(max_retries):
         try:
             debug_info.append(f"🚀 Attempt {attempt + 1}/{max_retries}")
@@ -253,9 +258,7 @@ def scrape_artist_concerts(artist_url, max_retries=2):
                 debug_info.append("✅ No bot detection found")
             
             # Extract artist name
-            url_parts = artist_url.split('/')[-1].split('-')
-            artist_name = ' '.join(url_parts[1:]).title() if len(url_parts) > 1 else 'Unknown Artist'
-            debug_info.append(f"🎤 Artist: {artist_name}")
+            debug_info.append(f"🎤 Processing: {artist_name}")
             
             # Try to click Past tab
             debug_info.append("🔍 Looking for Past tab...")
