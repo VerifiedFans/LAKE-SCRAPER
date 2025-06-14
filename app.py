@@ -4,6 +4,10 @@ import csv
 import time
 import json
 import re
+import subprocess
+import requests
+import zipfile
+import stat
 from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -38,13 +42,111 @@ scraping_status = {
     'debug_info': [],
     'raw_html': '',
     'page_title': '',
-    'current_url': ''
+    'current_url': '',
+    'chromedriver_status': 'Not initialized'
 }
 
 concert_data = []
 
+def get_chrome_version():
+    """Get the installed Chrome version"""
+    try:
+        result = subprocess.run(['/usr/bin/google-chrome', '--version'], 
+                              capture_output=True, text=True)
+        version_str = result.stdout.strip()
+        # Extract version number (e.g., "Google Chrome 137.0.7151.103" -> "137")
+        version_match = re.search(r'(\d+)\.', version_str)
+        if version_match:
+            return version_match.group(1)
+        return None
+    except Exception as e:
+        logger.error(f"Error getting Chrome version: {e}")
+        return None
+
+def download_correct_chromedriver():
+    """Download and install the correct ChromeDriver version"""
+    try:
+        # Get Chrome version
+        chrome_version = get_chrome_version()
+        if not chrome_version:
+            raise Exception("Could not determine Chrome version")
+        
+        logger.info(f"Chrome version detected: {chrome_version}")
+        scraping_status['chromedriver_status'] = f"Chrome version: {chrome_version}"
+        
+        # Download URL for ChromeDriver
+        chromedriver_url = f"https://chromedriver.storage.googleapis.com/LATEST_RELEASE_{chrome_version}"
+        
+        # Get the exact version
+        response = requests.get(chromedriver_url, timeout=10)
+        if response.status_code != 200:
+            # Try Chrome for Testing API for newer versions
+            api_url = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
+            api_response = requests.get(api_url, timeout=10)
+            if api_response.status_code == 200:
+                data = api_response.json()
+                stable_version = data['channels']['Stable']['version']
+                major_version = stable_version.split('.')[0]
+                if major_version == chrome_version:
+                    exact_version = stable_version
+                    download_url = f"https://storage.googleapis.com/chrome-for-testing-public/{exact_version}/linux64/chromedriver-linux64.zip"
+                else:
+                    raise Exception(f"No matching ChromeDriver for Chrome {chrome_version}")
+            else:
+                raise Exception(f"Could not get ChromeDriver version for Chrome {chrome_version}")
+        else:
+            exact_version = response.text.strip()
+            download_url = f"https://chromedriver.storage.googleapis.com/{exact_version}/chromedriver_linux64.zip"
+        
+        logger.info(f"Downloading ChromeDriver version: {exact_version}")
+        scraping_status['chromedriver_status'] = f"Downloading ChromeDriver {exact_version}"
+        
+        # Download ChromeDriver
+        driver_response = requests.get(download_url, timeout=30)
+        if driver_response.status_code != 200:
+            raise Exception(f"Failed to download ChromeDriver: {driver_response.status_code}")
+        
+        # Create temp directory for extraction
+        temp_dir = tempfile.mkdtemp()
+        zip_path = os.path.join(temp_dir, 'chromedriver.zip')
+        
+        # Save zip file
+        with open(zip_path, 'wb') as f:
+            f.write(driver_response.content)
+        
+        # Extract zip
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(temp_dir)
+        
+        # Find the chromedriver binary
+        chromedriver_path = None
+        for root, dirs, files in os.walk(temp_dir):
+            for file in files:
+                if file == 'chromedriver' or file == 'chromedriver.exe':
+                    chromedriver_path = os.path.join(root, file)
+                    break
+            if chromedriver_path:
+                break
+        
+        if not chromedriver_path:
+            raise Exception("ChromeDriver binary not found in downloaded zip")
+        
+        # Make it executable
+        os.chmod(chromedriver_path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+        
+        logger.info(f"ChromeDriver installed at: {chromedriver_path}")
+        scraping_status['chromedriver_status'] = f"Installed at {chromedriver_path}"
+        
+        return chromedriver_path
+        
+    except Exception as e:
+        error_msg = f"Failed to download ChromeDriver: {e}"
+        logger.error(error_msg)
+        scraping_status['chromedriver_status'] = f"Error: {error_msg}"
+        return None
+
 def get_chrome_options():
-    """Simple Chrome options that work"""
+    """Chrome options for stealth mode"""
     chrome_options = Options()
     
     # Essential for deployment
@@ -58,9 +160,14 @@ def get_chrome_options():
     chrome_options.add_argument('--disable-extensions')
     chrome_options.add_argument('--disable-plugins')
     chrome_options.add_argument('--disable-default-apps')
+    chrome_options.add_argument('--disable-background-timer-throttling')
+    chrome_options.add_argument('--disable-backgrounding-occluded-windows')
+    chrome_options.add_argument('--disable-renderer-backgrounding')
     
-    # Realistic user agent
-    chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36')
+    # Real user agent
+    chrome_version = get_chrome_version() or "137"
+    user_agent = f'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_version}.0.0.0 Safari/537.36'
+    chrome_options.add_argument(f'--user-agent={user_agent}')
     
     # Remove automation indicators
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -96,9 +203,10 @@ def extract_concerts_simple(driver, artist_name, debug_info):
         
         # Look for gospel/country venue keywords
         venue_keywords = [
-            'Baptist', 'Church', 'Center', 'Hall', 'Theater', 'Arena', 'Stadium',
+            'Baptist', 'Church', 'Center', 'Hall', 'Theater', 'Theatre', 'Arena', 'Stadium',
             'Civic', 'Memorial', 'Community', 'Gospel', 'Quartet', 'Auditorium',
-            'Convention', 'Coliseum', 'Amphitheater', 'Pavilion', 'Tabernacle'
+            'Convention', 'Coliseum', 'Amphitheater', 'Pavilion', 'Tabernacle',
+            'Academy', 'School', 'College', 'University', 'Fairgrounds'
         ]
         
         # Month abbreviations for dates
@@ -115,13 +223,13 @@ def extract_concerts_simple(driver, artist_name, debug_info):
         # Process each venue line
         processed_venues = set()
         
-        for venue_data in venue_lines[:25]:  # Limit to prevent overload
+        for venue_data in venue_lines[:30]:  # Process up to 30 potential venues
             try:
                 venue_line = venue_data['line']
                 line_index = venue_data['index']
                 
                 # Skip obvious non-venue lines
-                skip_terms = ['Set Reminder', 'Tickets', 'Follow', 'More Dates', 'Show More', 'Free Entry']
+                skip_terms = ['Set Reminder', 'Tickets', 'Follow', 'More Dates', 'Show More', 'Free Entry', 'View More']
                 if any(term in venue_line for term in skip_terms):
                     continue
                 
@@ -130,7 +238,7 @@ def extract_concerts_simple(driver, artist_name, debug_info):
                 
                 # Look for date in nearby lines
                 date_str = ""
-                search_range = 3  # Look 3 lines before and after
+                search_range = 4  # Look 4 lines before and after
                 start_idx = max(0, line_index - search_range)
                 end_idx = min(len(lines), line_index + search_range + 1)
                 
@@ -180,27 +288,33 @@ def extract_concerts_simple(driver, artist_name, debug_info):
         return concerts
 
 def scrape_artist_concerts(artist_url, max_retries=2):
-    """Scrape concerts with retry logic"""
+    """Scrape concerts with automatic ChromeDriver management"""
     driver = None
     concerts = []
     debug_info = []
     
-    # Extract artist name early (outside the retry loop)
+    # Extract artist name early
     url_parts = artist_url.split('/')[-1].split('-')
     artist_name = ' '.join(url_parts[1:]).title() if len(url_parts) > 1 else 'Unknown Artist'
     debug_info.append(f"🎤 Artist: {artist_name}")
+    
+    # Download correct ChromeDriver
+    chromedriver_path = download_correct_chromedriver()
+    if not chromedriver_path:
+        debug_info.append("❌ Failed to download correct ChromeDriver")
+        return concerts
     
     for attempt in range(max_retries):
         try:
             debug_info.append(f"🚀 Attempt {attempt + 1}/{max_retries}")
             
-            # Initialize Chrome driver
+            # Initialize Chrome driver with correct ChromeDriver
             chrome_options = get_chrome_options()
+            service = Service(chromedriver_path)
             
             try:
-                # Try with system ChromeDriver
-                driver = webdriver.Chrome(options=chrome_options)
-                debug_info.append("✅ Chrome driver initialized successfully")
+                driver = webdriver.Chrome(service=service, options=chrome_options)
+                debug_info.append("✅ Chrome driver initialized with correct version")
             except Exception as e:
                 debug_info.append(f"❌ Chrome driver error: {e}")
                 if attempt == max_retries - 1:
@@ -404,7 +518,7 @@ def scrape_multiple_artists(artist_urls):
             
             # Delay between artists
             if i < len(artist_urls) - 1:
-                delay = random.uniform(8, 20)
+                delay = random.uniform(10, 25)
                 logger.info(f"Waiting {delay:.1f} seconds before next artist")
                 time.sleep(delay)
             
@@ -475,7 +589,8 @@ def get_scraping_status():
         'errors': scraping_status['errors'],
         'debug_info': scraping_status.get('debug_info', []),
         'page_title': scraping_status.get('page_title', ''),
-        'current_url': scraping_status.get('current_url', '')
+        'current_url': scraping_status.get('current_url', ''),
+        'chromedriver_status': scraping_status.get('chromedriver_status', 'Unknown')
     })
 
 @app.route('/stop_scraping', methods=['POST'])
@@ -513,7 +628,8 @@ def get_debug_info():
         'concert_data': concert_data,
         'concert_count': len(concert_data),
         'page_title': scraping_status.get('page_title', ''),
-        'current_url': scraping_status.get('current_url', '')
+        'current_url': scraping_status.get('current_url', ''),
+        'chromedriver_status': scraping_status.get('chromedriver_status', 'Unknown')
     })
 
 @app.route('/raw_html')
