@@ -326,11 +326,14 @@ def scrape_artist_concerts(artist_url, max_retries=2):
             
             # Navigate to page
             debug_info.append(f"🌐 Navigating to: {artist_url}")
+            logger.info(f"🌐 Navigating to: {artist_url}")
             driver.get(artist_url)
+            logger.info(f"✅ GET request completed for: {artist_url}")
             
             # Wait for page load
             delay = human_delay(3, 6)
             debug_info.append(f"⏳ Waiting {delay:.1f}s for page load")
+            logger.info(f"⏳ Waiting {delay:.1f}s for page load")
             
             # Check if page loaded
             try:
@@ -338,8 +341,10 @@ def scrape_artist_concerts(artist_url, max_retries=2):
                     EC.presence_of_element_located((By.TAG_NAME, "body"))
                 )
                 debug_info.append("✅ Page body loaded")
+                logger.info("✅ Page body loaded successfully")
             except TimeoutException:
                 debug_info.append("❌ Timeout waiting for page load")
+                logger.error("❌ Timeout waiting for page load")
                 if attempt == max_retries - 1:
                     return concerts
                 continue
