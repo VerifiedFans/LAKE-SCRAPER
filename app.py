@@ -5,10 +5,12 @@ import time
 import json
 import re
 from datetime import datetime, timedelta
-import undetected_chromedriver as uc
+from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
@@ -41,261 +43,278 @@ scraping_status = {
 
 concert_data = []
 
-def get_undetected_chrome():
-    """Get undetected Chrome driver with automatic ChromeDriver management"""
-    
-    # Undetected Chrome options
-    options = uc.ChromeOptions()
+def get_chrome_options():
+    """Simple Chrome options that work"""
+    chrome_options = Options()
     
     # Essential for deployment
-    options.add_argument('--headless')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
+    chrome_options.add_argument('--headless')
+    chrome_options.add_argument('--no-sandbox')
+    chrome_options.add_argument('--disable-dev-shm-usage')
+    chrome_options.add_argument('--window-size=1366,768')
     
-    # Human-like settings
-    options.add_argument('--window-size=1366,768')
-    options.add_argument('--disable-blink-features=AutomationControlled')
-    options.add_argument('--disable-extensions')
-    options.add_argument('--disable-plugins')
-    options.add_argument('--disable-default-apps')
-    options.add_argument('--disable-background-timer-throttling')
-    options.add_argument('--disable-backgrounding-occluded-windows')
-    options.add_argument('--disable-renderer-backgrounding')
-    options.add_argument('--disable-features=TranslateUI')
-    options.add_argument('--disable-ipc-flooding-protection')
+    # Anti-detection
+    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+    chrome_options.add_argument('--disable-extensions')
+    chrome_options.add_argument('--disable-plugins')
+    chrome_options.add_argument('--disable-default-apps')
     
-    # Create undetected Chrome driver (handles ChromeDriver version automatically)
-    driver = uc.Chrome(options=options, version_main=None)
+    # Realistic user agent
+    chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36')
     
-    return driver
+    # Remove automation indicators
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option('useAutomationExtension', False)
+    
+    return chrome_options
 
-def human_like_delay(min_seconds=1, max_seconds=3):
-    """Random delay to mimic human behavior"""
-    delay = random.uniform(min_seconds, max_seconds)
+def human_delay(min_sec=1, max_sec=3):
+    """Human-like delay"""
+    delay = random.uniform(min_sec, max_sec)
     time.sleep(delay)
     return delay
 
-def extract_concerts_from_page(driver, artist_name, debug_info):
-    """Extract concerts using multiple strategies"""
+def extract_concerts_simple(driver, artist_name, debug_info):
+    """Simple but effective concert extraction"""
     concerts = []
     
     try:
-        # Get page text
+        # Get all text from the page
         body_text = driver.find_element(By.TAG_NAME, "body").text
         debug_info.append(f"📝 Page text length: {len(body_text)} characters")
         
-        if not body_text:
-            debug_info.append("❌ No page text found")
+        if len(body_text) < 100:
+            debug_info.append("❌ Very little text found on page")
             return concerts
         
-        # Sample of text for debugging
-        debug_info.append(f"📝 Text sample: {body_text[:300]}...")
+        # Sample of the text
+        debug_info.append(f"📝 Text sample: {body_text[:500]}...")
         
-        # Look for venue patterns
+        # Split into lines
         lines = [line.strip() for line in body_text.split('\n') if line.strip()]
+        debug_info.append(f"📄 Total lines: {len(lines)}")
         
+        # Look for gospel/country venue keywords
         venue_keywords = [
             'Baptist', 'Church', 'Center', 'Hall', 'Theater', 'Arena', 'Stadium',
             'Civic', 'Memorial', 'Community', 'Gospel', 'Quartet', 'Auditorium',
-            'Convention', 'Coliseum', 'Amphitheater', 'Pavilion'
+            'Convention', 'Coliseum', 'Amphitheater', 'Pavilion', 'Tabernacle'
         ]
         
+        # Month abbreviations for dates
         months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
         
-        potential_venues = []
-        
+        # Find lines with venue keywords
+        venue_lines = []
         for i, line in enumerate(lines):
-            # Check for venue keywords
-            if any(keyword in line for keyword in venue_keywords):
-                # Get context around this line
-                context_start = max(0, i-2)
-                context_end = min(len(lines), i+3)
-                context = lines[context_start:context_end]
-                
-                potential_venues.append({
-                    'venue_line': line,
-                    'context': context,
-                    'line_index': i
-                })
+            if any(keyword.lower() in line.lower() for keyword in venue_keywords):
+                venue_lines.append({'line': line, 'index': i})
         
-        debug_info.append(f"🎯 Found {len(potential_venues)} potential venue lines")
+        debug_info.append(f"🎯 Found {len(venue_lines)} lines with venue keywords")
         
-        # Process potential venues
+        # Process each venue line
         processed_venues = set()
         
-        for venue_data in potential_venues[:20]:  # Limit to first 20
+        for venue_data in venue_lines[:25]:  # Limit to prevent overload
             try:
-                venue_name = venue_data['venue_line'].strip()
-                venue_address = ""
-                date_str = ""
+                venue_line = venue_data['line']
+                line_index = venue_data['index']
                 
-                # Look for date in context
-                for context_line in venue_data['context']:
-                    if any(month in context_line.upper() for month in months):
-                        date_str = context_line.strip()
-                        break
-                
-                # Look for location in context
-                for context_line in venue_data['context']:
-                    location_match = re.search(r'([A-Za-z\s]+,\s*[A-Z]{2})\b', context_line)
-                    if location_match:
-                        venue_address = location_match.group(1).strip()
-                        break
-                
-                # Clean venue name
-                venue_name = re.sub(r'\s+', ' ', venue_name).strip()
-                
-                # Filter out non-venue lines
-                skip_keywords = ['Set Reminder', 'Tickets', 'Free Entry', 'Follow', 'More Dates', 'Show More']
-                if any(skip in venue_name for skip in skip_keywords):
+                # Skip obvious non-venue lines
+                skip_terms = ['Set Reminder', 'Tickets', 'Follow', 'More Dates', 'Show More', 'Free Entry']
+                if any(term in venue_line for term in skip_terms):
                     continue
                 
+                # Clean the venue name
+                venue_name = re.sub(r'\s+', ' ', venue_line).strip()
+                
+                # Look for date in nearby lines
+                date_str = ""
+                search_range = 3  # Look 3 lines before and after
+                start_idx = max(0, line_index - search_range)
+                end_idx = min(len(lines), line_index + search_range + 1)
+                
+                for nearby_line in lines[start_idx:end_idx]:
+                    if any(month in nearby_line.upper() for month in months):
+                        date_str = nearby_line.strip()
+                        break
+                
+                # Look for location (City, ST format)
+                location_str = ""
+                for nearby_line in lines[start_idx:end_idx]:
+                    location_match = re.search(r'([A-Za-z\s]+,\s*[A-Z]{2})\b', nearby_line)
+                    if location_match:
+                        location_str = location_match.group(1).strip()
+                        break
+                
                 # Add if valid and not duplicate
-                if venue_name and len(venue_name) > 5 and venue_name not in processed_venues:
+                if (venue_name and 
+                    len(venue_name) > 8 and 
+                    len(venue_name) < 200 and
+                    venue_name not in processed_venues):
+                    
                     concert = {
                         'artist_name': artist_name,
                         'venue_name': venue_name,
-                        'venue_address': venue_address or 'Not specified',
+                        'venue_address': location_str or 'Not specified',
                         'concert_date': date_str or 'Date not found'
                     }
                     
                     concerts.append(concert)
                     processed_venues.add(venue_name)
-                    debug_info.append(f"   ✅ Added: {venue_name} | {date_str} | {venue_address}")
+                    debug_info.append(f"   ✅ Added: {venue_name}")
+                    if date_str:
+                        debug_info.append(f"      📅 Date: {date_str}")
+                    if location_str:
+                        debug_info.append(f"      📍 Location: {location_str}")
                 
             except Exception as e:
-                debug_info.append(f"   ❌ Error processing venue: {e}")
+                debug_info.append(f"   ❌ Error processing venue line: {e}")
                 continue
         
-        debug_info.append(f"🎯 Total concerts extracted: {len(concerts)}")
+        debug_info.append(f"🎯 Total concerts found: {len(concerts)}")
         return concerts
         
     except Exception as e:
         debug_info.append(f"❌ Error in concert extraction: {e}")
         return concerts
 
-def scrape_artist_concerts(artist_url, max_pages=3):
-    """Scrape concerts using undetected Chrome"""
+def scrape_artist_concerts(artist_url, max_retries=2):
+    """Scrape concerts with retry logic"""
     driver = None
     concerts = []
     debug_info = []
     
-    try:
-        # Initialize undetected Chrome
-        debug_info.append("🚀 Initializing undetected Chrome driver...")
-        driver = get_undetected_chrome()
-        debug_info.append("✅ Undetected Chrome driver initialized successfully")
-        
-        # Navigate to page
-        debug_info.append(f"🌐 Navigating to: {artist_url}")
-        driver.get(artist_url)
-        
-        # Human-like waiting
-        delay = human_like_delay(3, 6)
-        debug_info.append(f"⏳ Human-like delay: {delay:.1f}s")
-        
-        # Wait for page to load
+    for attempt in range(max_retries):
         try:
-            WebDriverWait(driver, 20).until(
-                EC.presence_of_element_located((By.TAG_NAME, "body"))
-            )
-            debug_info.append("✅ Page loaded successfully")
-        except TimeoutException:
-            debug_info.append("❌ Timeout waiting for page load")
-            return concerts
-        
-        # Get page information
-        page_title = driver.title
-        current_url = driver.current_url
-        scraping_status['page_title'] = page_title
-        scraping_status['current_url'] = current_url
-        
-        debug_info.append(f"📄 Page title: '{page_title}'")
-        debug_info.append(f"📄 Current URL: {current_url}")
-        
-        # Check for bot detection
-        page_source = driver.page_source
-        scraping_status['raw_html'] = page_source[:15000]
-        
-        bot_indicators = ['access denied', 'blocked', 'captcha', 'forbidden', 'bot detected']
-        detected = [indicator for indicator in bot_indicators if indicator in page_source.lower()]
-        
-        if detected:
-            debug_info.append(f"🚫 Possible bot detection: {detected}")
-        else:
-            debug_info.append("✅ No bot detection indicators found")
-        
-        # Extract artist name
-        url_parts = artist_url.split('/')[-1].split('-')
-        artist_name = ' '.join(url_parts[1:]).title() if len(url_parts) > 1 else 'Unknown Artist'
-        debug_info.append(f"🎤 Artist: {artist_name}")
-        
-        # Look for Past tab
-        debug_info.append("🔍 Looking for Past tab...")
-        
-        past_clicked = False
-        try:
-            # Try multiple selectors for Past tab
-            past_selectors = [
-                "//a[normalize-space(text())='Past']",
-                "//div[normalize-space(text())='Past']",
-                "//span[normalize-space(text())='Past']",
-                "//button[normalize-space(text())='Past']",
-                "//*[contains(text(), 'Past')]"
-            ]
+            debug_info.append(f"🚀 Attempt {attempt + 1}/{max_retries}")
             
-            for selector in past_selectors:
-                try:
-                    elements = driver.find_elements(By.XPATH, selector)
-                    for element in elements:
-                        if element.is_displayed() and element.is_enabled():
-                            # Scroll to element
-                            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-                            human_like_delay(0.5, 1)
-                            
-                            # Click
-                            element.click()
-                            past_clicked = True
-                            debug_info.append("✅ Successfully clicked Past tab")
-                            human_like_delay(3, 6)  # Wait for content to load
-                            break
-                    if past_clicked:
-                        break
-                except:
-                    continue
+            # Initialize Chrome driver
+            chrome_options = get_chrome_options()
             
-            if not past_clicked:
-                debug_info.append("⚠️ Could not find/click Past tab, proceeding with current page")
-                
-        except Exception as e:
-            debug_info.append(f"❌ Error with Past tab: {e}")
-        
-        # Extract concerts
-        debug_info.append("🎵 Extracting concerts...")
-        concerts = extract_concerts_from_page(driver, artist_name, debug_info)
-        
-        # Store debug info
-        scraping_status['debug_info'] = debug_info
-        
-        debug_info.append(f"🎯 FINAL RESULT: Found {len(concerts)} concerts for {artist_name}")
-        logger.info(f"Undetected Chrome scraping completed for {artist_name}: {len(concerts)} concerts")
-        
-        return concerts
-        
-    except Exception as e:
-        error_msg = f"❌ Critical error in undetected Chrome scraping {artist_url}: {e}"
-        debug_info.append(error_msg)
-        scraping_status['debug_info'] = debug_info
-        logger.error(error_msg)
-        return concerts
-        
-    finally:
-        if driver:
             try:
-                human_like_delay(1, 2)
-                driver.quit()
-            except:
-                pass
+                # Try with system ChromeDriver
+                driver = webdriver.Chrome(options=chrome_options)
+                debug_info.append("✅ Chrome driver initialized successfully")
+            except Exception as e:
+                debug_info.append(f"❌ Chrome driver error: {e}")
+                if attempt == max_retries - 1:
+                    raise e
+                continue
+            
+            # Hide webdriver property
+            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            
+            # Navigate to page
+            debug_info.append(f"🌐 Navigating to: {artist_url}")
+            driver.get(artist_url)
+            
+            # Wait for page load
+            delay = human_delay(3, 6)
+            debug_info.append(f"⏳ Waiting {delay:.1f}s for page load")
+            
+            # Check if page loaded
+            try:
+                WebDriverWait(driver, 15).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+                debug_info.append("✅ Page body loaded")
+            except TimeoutException:
+                debug_info.append("❌ Timeout waiting for page load")
+                if attempt == max_retries - 1:
+                    return concerts
+                continue
+            
+            # Get page info
+            page_title = driver.title
+            current_url = driver.current_url
+            scraping_status['page_title'] = page_title
+            scraping_status['current_url'] = current_url
+            
+            debug_info.append(f"📄 Page title: '{page_title}'")
+            debug_info.append(f"📄 Current URL: {current_url}")
+            
+            # Capture HTML sample
+            page_source = driver.page_source
+            scraping_status['raw_html'] = page_source[:15000]
+            debug_info.append(f"📄 HTML captured: {len(page_source)} characters")
+            
+            # Check for bot detection
+            bot_indicators = ['access denied', 'blocked', 'captcha', 'forbidden', 'bot detected']
+            detected = [indicator for indicator in bot_indicators if indicator in page_source.lower()]
+            
+            if detected:
+                debug_info.append(f"🚫 Bot detection indicators: {detected}")
+                if attempt == max_retries - 1:
+                    return concerts
+                human_delay(5, 10)  # Wait longer before retry
+                continue
+            else:
+                debug_info.append("✅ No bot detection found")
+            
+            # Extract artist name
+            url_parts = artist_url.split('/')[-1].split('-')
+            artist_name = ' '.join(url_parts[1:]).title() if len(url_parts) > 1 else 'Unknown Artist'
+            debug_info.append(f"🎤 Artist: {artist_name}")
+            
+            # Try to click Past tab
+            debug_info.append("🔍 Looking for Past tab...")
+            try:
+                # Simple approach - look for Past text
+                past_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'Past')]")
+                
+                clicked_past = False
+                for element in past_elements[:3]:  # Try first 3 matches
+                    try:
+                        if element.is_displayed() and element.is_enabled():
+                            driver.execute_script("arguments[0].scrollIntoView();", element)
+                            human_delay(0.5, 1)
+                            element.click()
+                            clicked_past = True
+                            debug_info.append("✅ Clicked Past tab")
+                            human_delay(3, 5)  # Wait for content
+                            break
+                    except:
+                        continue
+                
+                if not clicked_past:
+                    debug_info.append("⚠️ Could not click Past tab, using current page")
+            
+            except Exception as e:
+                debug_info.append(f"❌ Past tab error: {e}")
+            
+            # Extract concerts
+            debug_info.append("🎵 Extracting concerts...")
+            concerts = extract_concerts_simple(driver, artist_name, debug_info)
+            
+            # Success - break retry loop
+            break
+            
+        except Exception as e:
+            error_msg = f"❌ Attempt {attempt + 1} failed: {e}"
+            debug_info.append(error_msg)
+            
+            if attempt == max_retries - 1:
+                logger.error(f"All attempts failed for {artist_url}: {e}")
+            else:
+                debug_info.append(f"🔄 Retrying in 5 seconds...")
+                time.sleep(5)
+            
+        finally:
+            if driver:
+                try:
+                    driver.quit()
+                except:
+                    pass
+                driver = None
+    
+    # Store debug info
+    scraping_status['debug_info'] = debug_info
+    
+    debug_info.append(f"🎯 FINAL RESULT: Found {len(concerts)} concerts for {artist_name}")
+    logger.info(f"Scraping completed for {artist_name}: {len(concerts)} concerts")
+    
+    return concerts
 
 def scrape_multiple_artists(artist_urls):
     """Scrape multiple artists"""
@@ -337,8 +356,8 @@ def scrape_multiple_artists(artist_urls):
             
             # Delay between artists
             if i < len(artist_urls) - 1:
-                delay = random.uniform(5, 15)
-                logger.info(f"Delay: {delay:.1f} seconds before next artist")
+                delay = random.uniform(8, 20)
+                logger.info(f"Waiting {delay:.1f} seconds before next artist")
                 time.sleep(delay)
             
     except Exception as e:
@@ -382,7 +401,7 @@ def start_scraping():
             invalid_urls.append(url)
     
     if invalid_urls:
-        error_msg = f"Invalid URLs (need format like '/a/147132-artist-name'): {', '.join(invalid_urls[:3])}"
+        error_msg = f"Invalid URLs: {', '.join(invalid_urls[:3])}"
         if len(invalid_urls) > 3:
             error_msg += f" and {len(invalid_urls) - 3} more"
         return jsonify({'error': error_msg}), 400
