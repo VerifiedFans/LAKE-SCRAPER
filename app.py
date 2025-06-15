@@ -342,9 +342,21 @@ def scrape_artist_concerts(artist_url, max_retries=2):
                 )
                 debug_info.append("✅ Page body loaded")
                 logger.info("✅ Page body loaded successfully")
+                
+                # CHECKPOINT: Confirm we can interact with the page
+                logger.info("🔍 CHECKPOINT: Testing page interaction...")
+                current_url = driver.current_url
+                logger.info(f"🔍 Current URL: {current_url}")
+                
             except TimeoutException:
                 debug_info.append("❌ Timeout waiting for page load")
                 logger.error("❌ Timeout waiting for page load")
+                if attempt == max_retries - 1:
+                    return concerts
+                continue
+            except Exception as e:
+                debug_info.append(f"❌ Unexpected error during page load: {str(e)}")
+                logger.error(f"❌ Unexpected error during page load: {str(e)}")
                 if attempt == max_retries - 1:
                     return concerts
                 continue
